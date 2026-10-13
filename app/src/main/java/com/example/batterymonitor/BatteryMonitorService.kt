@@ -15,7 +15,6 @@ import kotlinx.coroutines.*
 import kotlin.math.abs
 
 class BatteryMonitorService : Service() {
-
     private val CHANNEL_ID = "BatteryMonitorChannel"
     private var wakeLock: PowerManager.WakeLock? = null
     private var serviceJob: Job? = null
@@ -25,7 +24,10 @@ class BatteryMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        createNotificationChannel()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(CHANNEL_ID, "Battery Tracker", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -33,10 +35,9 @@ class BatteryMonitorService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Batarya Analizi Aktif")
-            .setContentText("Geçmiş veriler kaydediliyor...")
+            .setContentText("Cihaz verileri okunuyor...")
             .setSmallIcon(android.R.drawable.ic_lock_idle_charging)
             .setOngoing(true)
             .build()
@@ -50,32 +51,39 @@ class BatteryMonitorService : Service() {
         acquireWakeLock()
         BatteryStorage.isServiceRunning.value = true
         startMonitoring()
-
         return START_STICKY
     }
 
-      private fun startMonitoring() {
+    private fun startMonitoring() {
         serviceJob?.cancel()
         serviceJob = scope.launch {
             while (isActive) {
-                // 1. Akımı Oku
                 val rawMicroAmps = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
                 var currentMilliAmps = rawMicroAmps / 1000f
 
-                // 2. Poco/Xiaomi için KESİN şarj durumu kontrolü (Anlık Broadcast yayını okuma)
                 val batteryStatus = applicationContext.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
                 val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
                 val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                
+                // Ekstra Cihaz ve Donanım Verilerini Çekme
+                val tempExtra = batteryStatus?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+                val voltExtra = batteryStatus?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0
+                val healthExtra = batteryStatus?.getIntExtra(BatteryManager.EXTRA_HEALTH, 0) ?: 0
 
-                // 3. Değeri mutlak değere (her zaman pozitife) çevir
-                currentMilliAmps = kotlin.math.abs(currentMilliAmps)
-
-                // 4. Eğer donanımsal olarak şarjda değilse, değeri eksi (-) yap
-                if (!isCharging) {
-                    currentMilliAmps *= -1f
+                BatteryStorage.batteryTemp.value = tempExtra / 10f
+                BatteryStorage.batteryVoltage.value = if (voltExtra > 100) voltExtra / 1000f else voltExtra.toFloat()
+                BatteryStorage.batteryHealth.value = when (healthExtra) {
+                    BatteryManager.BATTERY_HEALTH_GOOD -> "İyi Durumda"
+                    BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Aşırı Isınmış"
+                    BatteryManager.BATTERY_HEALTH_DEAD -> "Ömrünü Tamamlamış"
+                    BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Yüksek Voltaj Riski"
+                    BatteryManager.BATTERY_HEALTH_COLD -> "Çok Soğuk"
+                    else -> "Bilinmiyor"
                 }
 
-                // Veriyi anlık UI'a gönder ve arka plandaki CSV dosyasına kaydet
+                currentMilliAmps = abs(currentMilliAmps)
+                if (!isCharging) currentMilliAmps *= -1f
+
                 BatteryStorage.liveCurrentMa.value = currentMilliAmps
                 BatteryStorage.saveRecord(applicationContext, currentMilliAmps)
                 
@@ -85,10 +93,10 @@ class BatteryMonitorService : Service() {
     }
 
     private fun acquireWakeLock() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BatteryMonitor::WakeLock").apply {
-            acquire(30 * 60 * 1000L) // 30 Dakika arka planda uyanık kalma izni
-        }
+        wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BatteryMonitor::WakeLock").apply {
+                acquire(30 * 60 * 1000L) 
+            }
     }
 
     override fun onDestroy() {
@@ -97,13 +105,5 @@ class BatteryMonitorService : Service() {
         BatteryStorage.isServiceRunning.value = false
         super.onDestroy()
     }
-
     override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Battery Tracker", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
-    }
 }
