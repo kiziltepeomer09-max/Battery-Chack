@@ -54,7 +54,7 @@ class BatteryMonitorService : Service() {
         return START_STICKY
     }
 
-    private fun startMonitoring() {
+      private fun startMonitoring() {
         serviceJob?.cancel()
         serviceJob = scope.launch {
             while (isActive) {
@@ -62,13 +62,15 @@ class BatteryMonitorService : Service() {
                 val rawMicroAmps = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
                 var currentMilliAmps = rawMicroAmps / 1000f
 
-                // 2. Cihazın şarj olup olmadığını KESİN olarak öğren
-                val isCharging = batteryManager.isCharging
+                // 2. Poco/Xiaomi için KESİN şarj durumu kontrolü (Anlık Broadcast yayını okuma)
+                val batteryStatus = applicationContext.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
 
-                // 3. Değeri her zaman pozitife çevir (Terslikleri sıfırla)
-                currentMilliAmps = abs(currentMilliAmps)
+                // 3. Değeri mutlak değere (her zaman pozitife) çevir
+                currentMilliAmps = kotlin.math.abs(currentMilliAmps)
 
-                // 4. "Ampere" Mantığı: Eğer şarjda değilse, değer EKSİ olmalıdır. 
+                // 4. Eğer donanımsal olarak şarjda değilse, değeri eksi (-) yap
                 if (!isCharging) {
                     currentMilliAmps *= -1f
                 }
@@ -77,7 +79,6 @@ class BatteryMonitorService : Service() {
                 BatteryStorage.liveCurrentMa.value = currentMilliAmps
                 BatteryStorage.saveRecord(applicationContext, currentMilliAmps)
                 
-                // Hızlı şarj dalgalanmalarını yormamak için 3 saniyede bir okuma yapar
                 delay(3000L)
             }
         }
