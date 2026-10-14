@@ -32,6 +32,7 @@ import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.entry.entryModelOf
 import kotlinx.coroutines.delay
 import java.util.Locale
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
     private val permLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -44,14 +45,25 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val prefs = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
-            var isDarkTheme by remember { mutableStateOf(prefs.getBoolean("dark_theme", true)) }
+            var activeTheme by remember { mutableStateOf(prefs.getString("theme", "DARK") ?: "DARK") }
             
-            MaterialTheme(colorScheme = if (isDarkTheme) darkColorScheme() else lightColorScheme()) {
+            // Tema kaydetme ayarları yüklendi
+            BatteryStorage.isTempAlarmEnabled.value = prefs.getBoolean("temp_alarm", false)
+            BatteryStorage.isFullAlarmEnabled.value = prefs.getBoolean("full_alarm", false)
+
+            val colorScheme = when(activeTheme) {
+                "AMOLED" -> darkColorScheme(background = Color.Black, surface = Color.Black, primary = Color(0xFF03DAC5))
+                "CYBERPUNK" -> darkColorScheme(background = Color(0xFF120024), surfaceVariant = Color(0xFF2A004D), primary = Color(0xFFFF003C))
+                "LIGHT" -> lightColorScheme()
+                else -> darkColorScheme()
+            }
+            
+            MaterialTheme(colorScheme = colorScheme) {
                 MainAppScreen(
-                    isDarkTheme = isDarkTheme,
+                    activeTheme = activeTheme,
                     onThemeChange = { 
-                        isDarkTheme = it
-                        prefs.edit().putBoolean("dark_theme", it).apply()
+                        activeTheme = it
+                        prefs.edit().putString("theme", it).apply()
                     },
                     onStartService = { startService(Intent(this, BatteryMonitorService::class.java)) },
                     onStopService = { startService(Intent(this, BatteryMonitorService::class.java).apply { action = "STOP" }) }
@@ -62,30 +74,15 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MainAppScreen(isDarkTheme: Boolean, onThemeChange: (Boolean) -> Unit, onStartService: () -> Unit, onStopService: () -> Unit) {
+fun MainAppScreen(activeTheme: String, onThemeChange: (String) -> Unit, onStartService: () -> Unit, onStopService: () -> Unit) {
     var selectedTab by remember { mutableIntStateOf(0) }
     
     Scaffold(
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Filled.Home, contentDescription = "Ana Ekran") },
-                    label = { Text("Ana Ekran") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Filled.Info, contentDescription = "Cihaz & Pil") },
-                    label = { Text("Donanım") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = "Ayarlar") },
-                    label = { Text("Ayarlar") }
-                )
+                NavigationBarItem(selected = selectedTab == 0, onClick = { selectedTab = 0 }, icon = { Icon(Icons.Filled.Home, "Ana Ekran") }, label = { Text("Ana Ekran") })
+                NavigationBarItem(selected = selectedTab == 1, onClick = { selectedTab = 1 }, icon = { Icon(Icons.Filled.Info, "Donanım") }, label = { Text("Donanım") })
+                NavigationBarItem(selected = selectedTab == 2, onClick = { selectedTab = 2 }, icon = { Icon(Icons.Filled.Settings, "Ayarlar") }, label = { Text("Ayarlar") })
             }
         }
     ) { paddingValues ->
@@ -93,8 +90,21 @@ fun MainAppScreen(isDarkTheme: Boolean, onThemeChange: (Boolean) -> Unit, onStar
             when (selectedTab) {
                 0 -> DashboardScreen(onStartService, onStopService)
                 1 -> InfoScreen()
-                2 -> SettingsScreen(isDarkTheme, onThemeChange)
+                2 -> SettingsScreen(activeTheme, onThemeChange)
             }
+        }
+    }
+}
+
+@Composable
+fun CircularGauge(value: Float, maxValue: Float, unit: String, color: Color) {
+    val progress = (value / maxValue).coerceIn(0f, 1f)
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(100.dp)) {
+        CircularProgressIndicator(progress = 1f, color = MaterialTheme.colorScheme.surfaceVariant, strokeWidth = 8.dp, modifier = Modifier.fillMaxSize())
+        CircularProgressIndicator(progress = progress, color = color, strokeWidth = 8.dp, modifier = Modifier.fillMaxSize())
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(String.format(Locale.US, if(unit=="W") "%.1f" else "%.0f", value), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text(unit, fontSize = 12.sp, color = Color.Gray)
         }
     }
 }
@@ -103,8 +113,11 @@ fun MainAppScreen(isDarkTheme: Boolean, onThemeChange: (Boolean) -> Unit, onStar
 fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
     val context = LocalContext.current
     val liveCurrent by BatteryStorage.liveCurrentMa.collectAsState()
-    val liveVoltage by BatteryStorage.batteryVoltage.collectAsState() // YENİ: Voltajı ana ekrana çektik
+    val liveVoltage by BatteryStorage.batteryVoltage.collectAsState()
+    val batteryPct by BatteryStorage.batteryLevel.collectAsState()
+    val timeEst by BatteryStorage.timeEstimation.collectAsState()
     val isRunning by BatteryStorage.isServiceRunning.collectAsState()
+    
     var historyData by remember { mutableStateOf(emptyList<Float>()) }
 
     LaunchedEffect(isRunning) {
@@ -116,59 +129,36 @@ fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
 
     val isCharging = liveCurrent >= 0
     val mainColor = if (isCharging) Color(0xFF4CAF50) else Color(0xFFFF5722)
-    
-    // YENİ: Watt Hesaplama Formülü (Güç = Akım x Voltaj)
-    // liveCurrent mA cinsinden olduğu için 1000'e bölüp Amper (A) yapıyoruz.
-    val currentAmperes = Math.abs(liveCurrent) / 1000f
-    val currentWatt = currentAmperes * liveVoltage
+    val currentWatt = (abs(liveCurrent) / 1000f) * liveVoltage
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Akım Monitörü", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(24.dp))
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        // YENİ: Dairesel Göstergeler (Kadranlar)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            CircularGauge(value = batteryPct.toFloat(), maxValue = 100f, unit = "%", color = mainColor)
+            CircularGauge(value = currentWatt, maxValue = 90f, unit = "W", color = if(currentWatt > 40) Color.Red else Color(0xFF03DAC5))
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier.fillMaxWidth().height(180.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
+        Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().height(140.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (isRunning) (if (isCharging) "Şarj Oluyor" else "Deşarj Oluyor") else "Sistem Beklemede", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(timeEst, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                 Text(
                     text = "${liveCurrent.toInt()} mA",
-                    fontSize = 52.sp,
+                    fontSize = 46.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = if (isRunning) mainColor else Color.Gray
                 )
-                // YENİ: Watt Göstergesi
-                if (isRunning && liveVoltage > 0f) {
-                    Text(
-                        text = String.format(Locale.US, "Anlık Güç: %.1f W", currentWatt),
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier.fillMaxWidth().height(220.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
+        Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().height(180.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Box(modifier = Modifier.padding(16.dp)) {
                 if (historyData.size > 2) {
                     val entries = historyData.mapIndexed { index, value -> FloatEntry(index.toFloat(), value) }
-                    Chart(
-                        chart = lineChart(lines = listOf(lineSpec(lineColor = mainColor))),
-                        model = entryModelOf(entries),
-                        startAxis = rememberStartAxis(),
-                        bottomAxis = rememberBottomAxis(),
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    Chart(chart = lineChart(lines = listOf(lineSpec(lineColor = mainColor))), model = entryModelOf(entries), startAxis = rememberStartAxis(), bottomAxis = rememberBottomAxis(), modifier = Modifier.fillMaxSize())
                 } else {
                     Text("Grafik oluşturuluyor...", modifier = Modifier.align(Alignment.Center))
                 }
@@ -180,9 +170,9 @@ fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
         Button(
             onClick = { if (isRunning) onStop() else onStart() },
             colors = ButtonDefaults.buttonColors(containerColor = if (isRunning) Color(0xFFD32F2F) else Color(0xFF1976D2)),
-            modifier = Modifier.fillMaxWidth().height(60.dp)
+            modifier = Modifier.fillMaxWidth().height(56.dp)
         ) {
-            Text(if (isRunning) "Takibi Durdur" else "Takibi Başlat", fontSize = 18.sp)
+            Text(if (isRunning) "Takibi Durdur" else "Takibi Başlat")
         }
     }
 }
@@ -196,26 +186,20 @@ fun InfoScreen() {
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text("Cihaz ve Donanım", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         Spacer(modifier = Modifier.height(24.dp))
-
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Marka / Model:", fontWeight = FontWeight.Bold)
                 Text("${Build.MANUFACTURER.uppercase()} ${Build.MODEL}", fontSize = 18.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Android Sürümü:", fontWeight = FontWeight.Bold)
-                Text("Android ${Build.VERSION.RELEASE}", fontSize = 18.sp)
             }
         }
-
         Spacer(modifier = Modifier.height(16.dp))
-
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Pil Sağlığı:", fontWeight = FontWeight.Bold)
                 Text(health, fontSize = 18.sp, color = if(health == "İyi Durumda") Color(0xFF4CAF50) else Color.Red)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("Pil Sıcaklığı:", fontWeight = FontWeight.Bold)
-                Text("$temp °C", fontSize = 18.sp, color = if(temp > 40f) Color.Red else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("$temp °C", fontSize = 18.sp)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("Anlık Voltaj:", fontWeight = FontWeight.Bold)
                 Text("$volt V", fontSize = 18.sp)
@@ -225,28 +209,48 @@ fun InfoScreen() {
 }
 
 @Composable
-fun SettingsScreen(isDarkTheme: Boolean, onThemeChange: (Boolean) -> Unit) {
+fun SettingsScreen(activeTheme: String, onThemeChange: (String) -> Unit) {
     val context = LocalContext.current
+    val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+    val tempAlarm by BatteryStorage.isTempAlarmEnabled.collectAsState()
+    val fullAlarm by BatteryStorage.isFullAlarmEnabled.collectAsState()
+
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text("Ayarlar", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        Text("Görünüm", fontWeight = FontWeight.Bold, color = Color.Gray)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Button(onClick = { onThemeChange("DARK") }, colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="DARK") Color.Blue else Color.Gray)) { Text("Koyu") }
+            Button(onClick = { onThemeChange("AMOLED") }, colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="AMOLED") Color.Blue else Color.Gray)) { Text("Amoled") }
+            Button(onClick = { onThemeChange("CYBERPUNK") }, colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="CYBERPUNK") Color.Blue else Color.Gray)) { Text("Cyber") }
+        }
 
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Akıllı Alarmlar (Titreşimli)", fontWeight = FontWeight.Bold, color = Color.Gray)
+        
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Karanlık Tema", fontSize = 18.sp)
-                Switch(checked = isDarkTheme, onCheckedChange = { onThemeChange(it) })
+                Text("42°C Aşırı Isınma Uyarısı", fontSize = 16.sp)
+                Switch(checked = tempAlarm, onCheckedChange = { 
+                    BatteryStorage.isTempAlarmEnabled.value = it
+                    prefs.edit().putBoolean("temp_alarm", it).apply()
+                })
+            }
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("%100 Şarj Dolum Uyarısı", fontSize = 16.sp)
+                Switch(checked = fullAlarm, onCheckedChange = { 
+                    BatteryStorage.isFullAlarmEnabled.value = it
+                    prefs.edit().putBoolean("full_alarm", it).apply()
+                })
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
+        Spacer(modifier = Modifier.weight(1f))
         Button(
             onClick = { BatteryStorage.clearHistory(context) },
             colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Text("Kayıtlı Grafik Geçmişini Sil")
-        }
+            modifier = Modifier.fillMaxWidth().height(56.dp)
+        ) { Text("Kayıtlı Grafik Geçmişini Sil") }
     }
 }
