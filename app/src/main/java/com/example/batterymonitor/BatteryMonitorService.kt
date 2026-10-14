@@ -38,12 +38,18 @@ class BatteryMonitorService : Service() {
     private var tempAlarmTriggered = false
     private var fullAlarmTriggered = false
 
-    // YENİ: Kayan Pencere Değişkenleri
     private var windowManager: WindowManager? = null
     private var floatingView: View? = null
     private var textCurrent: TextView? = null
     private var textWatt: TextView? = null
     private var textTemp: TextView? = null
+
+    // YENİ: Seans Takip Değişkenleri
+    private var isCurrentlyCharging = false
+    private var sessionStart = 0L
+    private var sessionStartPct = 0
+    private var sessionMaxW = 0f
+    private var sessionMaxT = 0f
 
     override fun onCreate() {
         super.onCreate()
@@ -112,6 +118,27 @@ class BatteryMonitorService : Service() {
                 }
 
                 currentMilliAmps = abs(currentMilliAmps)
+                val currentWatt = (currentMilliAmps / 1000f) * voltF
+
+                // YENİ: Akıllı Şarj Seansı Mantığı
+                if (isCharging && !isCurrentlyCharging) {
+                    // Cihaz fişe takıldı!
+                    isCurrentlyCharging = true
+                    sessionStart = System.currentTimeMillis()
+                    sessionStartPct = batteryPct
+                    sessionMaxW = currentWatt
+                    sessionMaxT = tempC
+                } else if (isCharging && isCurrentlyCharging) {
+                    // Cihaz şarj olmaya devam ediyor, rekorları güncelle
+                    if (currentWatt > sessionMaxW) sessionMaxW = currentWatt
+                    if (tempC > sessionMaxT) sessionMaxT = tempC
+                } else if (!isCharging && isCurrentlyCharging) {
+                    // Cihaz fişten çekildi! Raporu kaydet.
+                    isCurrentlyCharging = false
+                    val session = ChargeSession(sessionStart, System.currentTimeMillis(), sessionStartPct, batteryPct, sessionMaxW, sessionMaxT)
+                    BatteryStorage.saveSession(applicationContext, session)
+                }
+
                 if (currentMilliAmps > 100f) {
                     if (isCharging) {
                         val missingMah = 5000f - (5000f * (batteryPct / 100f))
@@ -132,7 +159,6 @@ class BatteryMonitorService : Service() {
                 BatteryStorage.liveCurrentMa.value = currentMilliAmps
                 BatteryStorage.saveRecord(applicationContext, currentMilliAmps)
                 
-                // YENİ: Kayan Pencereyi Güncelle
                 withContext(Dispatchers.Main) {
                     if (BatteryStorage.isWidgetEnabled.value) {
                         showFloatingWindow()
@@ -168,7 +194,7 @@ class BatteryMonitorService : Service() {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 16, 24, 16)
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#B3000000")) // %70 Saydam Siyah
+                setColor(Color.parseColor("#B3000000")) 
                 cornerRadius = 32f
             }
         }
@@ -189,10 +215,7 @@ class BatteryMonitorService : Service() {
         layout.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    initialX = params.x
-                    initialY = params.y
-                    initialTouchX = event.rawX
-                    initialTouchY = event.rawY
+                    initialX = params.x; initialY = params.y; initialTouchX = event.rawX; initialTouchY = event.rawY
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -209,20 +232,14 @@ class BatteryMonitorService : Service() {
     }
 
     private fun updateFloatingWindow(ma: Float, volt: Float, temp: Float, isCharging: Boolean) {
-        val currentText = "${ma.toInt()} mA"
-        val wattText = String.format(Locale.US, "%.1f W", (abs(ma) / 1000f) * volt)
-        
-        textCurrent?.text = currentText
+        textCurrent?.text = "${ma.toInt()} mA"
         textCurrent?.setTextColor(if(isCharging) Color.parseColor("#4CAF50") else Color.parseColor("#FF5722"))
-        textWatt?.text = wattText
+        textWatt?.text = String.format(Locale.US, "%.1f W", (abs(ma) / 1000f) * volt)
         textTemp?.text = "$temp °C"
     }
 
     private fun removeFloatingWindow() {
-        floatingView?.let {
-            windowManager?.removeView(it)
-            floatingView = null
-        }
+        floatingView?.let { windowManager?.removeView(it); floatingView = null }
     }
 
     private fun checkAlarms(tempC: Float, pct: Int) {
@@ -236,9 +253,8 @@ class BatteryMonitorService : Service() {
 
     private fun triggerVibration() {
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createOneShot(1000, VibrationEffect.DEFAULT_AMPLITUDE))
-        } else vibrator.vibrate(1000)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) vibrator.vibrate(VibrationEffect.createOneShot(1000, VibrationEffect.DEFAULT_AMPLITUDE))
+        else vibrator.vibrate(1000)
     }
 
     private fun acquireWakeLock() {
