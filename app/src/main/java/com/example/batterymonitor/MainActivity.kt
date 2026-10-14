@@ -31,6 +31,7 @@ import com.patrykandpatrick.vico.compose.chart.line.lineSpec
 import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.entry.entryModelOf
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private val permLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -102,6 +103,7 @@ fun MainAppScreen(isDarkTheme: Boolean, onThemeChange: (Boolean) -> Unit, onStar
 fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
     val context = LocalContext.current
     val liveCurrent by BatteryStorage.liveCurrentMa.collectAsState()
+    val liveVoltage by BatteryStorage.batteryVoltage.collectAsState() // YENİ: Voltajı ana ekrana çektik
     val isRunning by BatteryStorage.isServiceRunning.collectAsState()
     var historyData by remember { mutableStateOf(emptyList<Float>()) }
 
@@ -114,6 +116,11 @@ fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
 
     val isCharging = liveCurrent >= 0
     val mainColor = if (isCharging) Color(0xFF4CAF50) else Color(0xFFFF5722)
+    
+    // YENİ: Watt Hesaplama Formülü (Güç = Akım x Voltaj)
+    // liveCurrent mA cinsinden olduğu için 1000'e bölüp Amper (A) yapıyoruz.
+    val currentAmperes = Math.abs(liveCurrent) / 1000f
+    val currentWatt = currentAmperes * liveVoltage
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Akım Monitörü", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
@@ -121,7 +128,7 @@ fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
 
         Card(
             shape = RoundedCornerShape(24.dp),
-            modifier = Modifier.fillMaxWidth().height(160.dp),
+            modifier = Modifier.fillMaxWidth().height(180.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -132,6 +139,16 @@ fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
                     fontWeight = FontWeight.ExtraBold,
                     color = if (isRunning) mainColor else Color.Gray
                 )
+                // YENİ: Watt Göstergesi
+                if (isRunning && liveVoltage > 0f) {
+                    Text(
+                        text = String.format(Locale.US, "Anlık Güç: %.1f W", currentWatt),
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
             }
         }
 
