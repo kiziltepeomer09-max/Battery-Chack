@@ -3,9 +3,12 @@ package com.example.batterymonitor
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -49,20 +52,20 @@ class MainActivity : ComponentActivity() {
             
             BatteryStorage.isTempAlarmEnabled.value = prefs.getBoolean("temp_alarm", false)
             BatteryStorage.isFullAlarmEnabled.value = prefs.getBoolean("full_alarm", false)
+            BatteryStorage.isWidgetEnabled.value = prefs.getBoolean("widget_enabled", false)
 
             val colorScheme = when(activeTheme) {
                 "AMOLED" -> darkColorScheme(background = Color.Black, surface = Color.Black, surfaceVariant = Color(0xFF121212), primary = Color(0xFF03DAC5))
                 "CYBERPUNK" -> darkColorScheme(background = Color(0xFF120024), surface = Color(0xFF120024), surfaceVariant = Color(0xFF2A004D), primary = Color(0xFFFF003C))
                 "LIGHT" -> lightColorScheme(background = Color(0xFFF5F5F5), surface = Color.White, surfaceVariant = Color.White, primary = Color(0xFF1976D2))
-                // YENİ: İstenilen Tatlı ve Şık Tema
                 "TATLI" -> lightColorScheme(
-                    background = Color(0xFFFFF0F5), // Uçuk pastel pembe/krem arka plan
+                    background = Color(0xFFFFF0F5),
                     surface = Color(0xFFFFF0F5),
-                    surfaceVariant = Color(0xFFFFE4E1), // Kartlar için yumuşak bir ton
-                    primary = Color(0xFFFF6289), // Butonlar ve vurgular için tatlı çilek pembesi
-                    onSurfaceVariant = Color(0xFF5D4037) // Göz yormayan kahverengimsi koyu yazılar
+                    surfaceVariant = Color(0xFFFFE4E1),
+                    primary = Color(0xFFFF6289),
+                    onSurfaceVariant = Color(0xFF5D4037)
                 )
-                else -> darkColorScheme() // DARK (Standart)
+                else -> darkColorScheme()
             }
             
             MaterialTheme(colorScheme = colorScheme) {
@@ -220,6 +223,14 @@ fun SettingsScreen(activeTheme: String, onThemeChange: (String) -> Unit) {
     val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
     val tempAlarm by BatteryStorage.isTempAlarmEnabled.collectAsState()
     val fullAlarm by BatteryStorage.isFullAlarmEnabled.collectAsState()
+    val widgetEnabled by BatteryStorage.isWidgetEnabled.collectAsState()
+
+    val overlayLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (Settings.canDrawOverlays(context)) {
+            BatteryStorage.isWidgetEnabled.value = true
+            prefs.edit().putBoolean("widget_enabled", true).apply()
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Text("Ayarlar", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
@@ -228,9 +239,9 @@ fun SettingsScreen(activeTheme: String, onThemeChange: (String) -> Unit) {
         Text("Koyu Temalar", fontWeight = FontWeight.Bold, color = Color.Gray, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Button(onClick = { onThemeChange("DARK") }, modifier = Modifier.weight(1f).padding(end=4.dp), colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="DARK") MaterialTheme.colorScheme.primary else Color.Gray)) { Text("Standart") }
-            Button(onClick = { onThemeChange("AMOLED") }, modifier = Modifier.weight(1f).padding(end=4.dp), colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="AMOLED") MaterialTheme.colorScheme.primary else Color.Gray)) { Text("Amoled") }
-            Button(onClick = { onThemeChange("CYBERPUNK") }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="CYBERPUNK") MaterialTheme.colorScheme.primary else Color.Gray)) { Text("Cyber") }
+            Button(onClick = { onThemeChange("DARK") }, modifier = Modifier.weight(1f).padding(end=4.dp), colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="DARK") MaterialTheme.colorScheme.primary else Color.Gray)) { Text("Standart", fontSize = 12.sp) }
+            Button(onClick = { onThemeChange("AMOLED") }, modifier = Modifier.weight(1f).padding(end=4.dp), colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="AMOLED") MaterialTheme.colorScheme.primary else Color.Gray)) { Text("Amoled", fontSize = 12.sp) }
+            Button(onClick = { onThemeChange("CYBERPUNK") }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = if(activeTheme=="CYBERPUNK") MaterialTheme.colorScheme.primary else Color.Gray)) { Text("Cyber", fontSize = 12.sp) }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -243,22 +254,37 @@ fun SettingsScreen(activeTheme: String, onThemeChange: (String) -> Unit) {
         }
 
         Spacer(modifier = Modifier.height(24.dp))
-        Text("Akıllı Alarmlar (Titreşimli)", fontWeight = FontWeight.Bold, color = Color.Gray, fontSize = 14.sp)
+        Text("Uygulama İçi Özellikler", fontWeight = FontWeight.Bold, color = Color.Gray, fontSize = 14.sp)
         Spacer(modifier = Modifier.height(8.dp))
         
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            // YENİ: Kayan Pencere Toggle Butonu
+            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text("Oyun Modu (Kayan Pencere)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("Diğer uygulamaların üzerinde gösterir", fontSize = 12.sp, color = Color.Gray)
+                }
+                Switch(checked = widgetEnabled, onCheckedChange = { 
+                    if (it && !Settings.canDrawOverlays(context)) {
+                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+                        overlayLauncher.launch(intent)
+                    } else {
+                        BatteryStorage.isWidgetEnabled.value = it
+                        prefs.edit().putBoolean("widget_enabled", it).apply()
+                    }
+                })
+            }
+            Divider(color = Color.LightGray, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 16.dp))
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("42°C Aşırı Isınma Uyarısı", fontSize = 16.sp)
                 Switch(checked = tempAlarm, onCheckedChange = { 
-                    BatteryStorage.isTempAlarmEnabled.value = it
-                    prefs.edit().putBoolean("temp_alarm", it).apply()
+                    BatteryStorage.isTempAlarmEnabled.value = it; prefs.edit().putBoolean("temp_alarm", it).apply()
                 })
             }
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("%100 Şarj Dolum Uyarısı", fontSize = 16.sp)
                 Switch(checked = fullAlarm, onCheckedChange = { 
-                    BatteryStorage.isFullAlarmEnabled.value = it
-                    prefs.edit().putBoolean("full_alarm", it).apply()
+                    BatteryStorage.isFullAlarmEnabled.value = it; prefs.edit().putBoolean("full_alarm", it).apply()
                 })
             }
         }
