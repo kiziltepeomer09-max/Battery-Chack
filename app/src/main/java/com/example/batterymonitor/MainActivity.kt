@@ -12,6 +12,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -34,6 +36,8 @@ import com.patrykandpatrick.vico.compose.chart.line.lineSpec
 import com.patrykandpatrick.vico.core.entry.FloatEntry
 import com.patrykandpatrick.vico.core.entry.entryModelOf
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 
@@ -45,6 +49,8 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        
+        BatteryStorage.loadSessions(this) // Uygulama açılırken raporları yükle
 
         setContent {
             val prefs = getSharedPreferences("app_settings", Context.MODE_PRIVATE)
@@ -58,13 +64,7 @@ class MainActivity : ComponentActivity() {
                 "AMOLED" -> darkColorScheme(background = Color.Black, surface = Color.Black, surfaceVariant = Color(0xFF121212), primary = Color(0xFF03DAC5))
                 "CYBERPUNK" -> darkColorScheme(background = Color(0xFF120024), surface = Color(0xFF120024), surfaceVariant = Color(0xFF2A004D), primary = Color(0xFFFF003C))
                 "LIGHT" -> lightColorScheme(background = Color(0xFFF5F5F5), surface = Color.White, surfaceVariant = Color.White, primary = Color(0xFF1976D2))
-                "TATLI" -> lightColorScheme(
-                    background = Color(0xFFFFF0F5),
-                    surface = Color(0xFFFFF0F5),
-                    surfaceVariant = Color(0xFFFFE4E1),
-                    primary = Color(0xFFFF6289),
-                    onSurfaceVariant = Color(0xFF5D4037)
-                )
+                "TATLI" -> lightColorScheme(background = Color(0xFFFFF0F5), surface = Color(0xFFFFF0F5), surfaceVariant = Color(0xFFFFE4E1), primary = Color(0xFFFF6289), onSurfaceVariant = Color(0xFF5D4037))
                 else -> darkColorScheme()
             }
             
@@ -127,7 +127,6 @@ fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
     val batteryPct by BatteryStorage.batteryLevel.collectAsState()
     val timeEst by BatteryStorage.timeEstimation.collectAsState()
     val isRunning by BatteryStorage.isServiceRunning.collectAsState()
-    
     var historyData by remember { mutableStateOf(emptyList<Float>()) }
 
     LaunchedEffect(isRunning) {
@@ -146,41 +145,24 @@ fun DashboardScreen(onStart: () -> Unit, onStop: () -> Unit) {
             CircularGauge(value = batteryPct.toFloat(), maxValue = 100f, unit = "%", color = mainColor)
             CircularGauge(value = currentWatt, maxValue = 90f, unit = "W", color = if(currentWatt > 40) Color.Red else MaterialTheme.colorScheme.primary)
         }
-        
         Spacer(modifier = Modifier.height(16.dp))
-
         Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().height(140.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(timeEst, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                Text(
-                    text = "${liveCurrent.toInt()} mA",
-                    fontSize = 46.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (isRunning) mainColor else Color.Gray
-                )
+                Text("${liveCurrent.toInt()} mA", fontSize = 46.sp, fontWeight = FontWeight.ExtraBold, color = if (isRunning) mainColor else Color.Gray)
             }
         }
-
         Spacer(modifier = Modifier.height(16.dp))
-
         Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().height(180.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Box(modifier = Modifier.padding(16.dp)) {
                 if (historyData.size > 2) {
                     val entries = historyData.mapIndexed { index, value -> FloatEntry(index.toFloat(), value) }
                     Chart(chart = lineChart(lines = listOf(lineSpec(lineColor = mainColor))), model = entryModelOf(entries), startAxis = rememberStartAxis(), bottomAxis = rememberBottomAxis(), modifier = Modifier.fillMaxSize())
-                } else {
-                    Text("Grafik oluşturuluyor...", modifier = Modifier.align(Alignment.Center))
-                }
+                } else Text("Grafik oluşturuluyor...", modifier = Modifier.align(Alignment.Center))
             }
         }
-
         Spacer(modifier = Modifier.weight(1f))
-        
-        Button(
-            onClick = { if (isRunning) onStop() else onStart() },
-            colors = ButtonDefaults.buttonColors(containerColor = if (isRunning) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary),
-            modifier = Modifier.fillMaxWidth().height(56.dp)
-        ) {
+        Button(onClick = { if (isRunning) onStop() else onStart() }, colors = ButtonDefaults.buttonColors(containerColor = if (isRunning) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary), modifier = Modifier.fillMaxWidth().height(56.dp)) {
             Text(if (isRunning) "Takibi Durdur" else "Takibi Başlat")
         }
     }
@@ -191,27 +173,54 @@ fun InfoScreen() {
     val temp by BatteryStorage.batteryTemp.collectAsState()
     val volt by BatteryStorage.batteryVoltage.collectAsState()
     val health by BatteryStorage.batteryHealth.collectAsState()
+    // YENİ: Raporları çekiyoruz
+    val sessions by BatteryStorage.chargeSessions.collectAsState()
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        Text("Cihaz ve Donanım", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-        Spacer(modifier = Modifier.height(24.dp))
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Marka / Model:", fontWeight = FontWeight.Bold)
-                Text("${Build.MANUFACTURER.uppercase()} ${Build.MODEL}", fontSize = 18.sp)
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Donanım Bilgisi", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Card(modifier = Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("Pil Sağlığı", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text(health, fontSize = 14.sp, color = if(health == "İyi Durumda") Color(0xFF4CAF50) else Color.Red)
+                }
+            }
+            Card(modifier = Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("Sıcaklık / Voltaj", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text("$temp °C | $volt V", fontSize = 14.sp)
+                }
             }
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Pil Sağlığı:", fontWeight = FontWeight.Bold)
-                Text(health, fontSize = 18.sp, color = if(health == "İyi Durumda") Color(0xFF4CAF50) else Color.Red)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Pil Sıcaklığı:", fontWeight = FontWeight.Bold)
-                Text("$temp °C", fontSize = 18.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Anlık Voltaj:", fontWeight = FontWeight.Bold)
-                Text("$volt V", fontSize = 18.sp)
+        
+        Spacer(modifier = Modifier.height(24.dp))
+        Text("Şarj Seansları Raporu", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        if (sessions.isEmpty()) {
+            Text("Henüz kaydedilmiş bir şarj seansı yok. Telefonu şarja takıp çıkardığınızda raporlar burada listelenecektir.", color = Color.Gray, modifier = Modifier.padding(16.dp))
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(sessions) { s ->
+                    val sdf = SimpleDateFormat("dd MMM HH:mm", Locale("tr"))
+                    val startDate = sdf.format(Date(s.start))
+                    val endDate = sdf.format(Date(s.end))
+                    val durMins = (s.end - s.start) / 60000
+                    
+                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("🗓 $startDate - $endDate ($durMins dk)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("🔋 %${s.startPct} ➔ %${s.endPct}")
+                                Text("⚡ Maks: ${String.format(Locale.US, "%.1f", s.maxW)}W")
+                                Text("🌡️ Maks: ${s.maxT}°C")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -258,7 +267,6 @@ fun SettingsScreen(activeTheme: String, onThemeChange: (String) -> Unit) {
         Spacer(modifier = Modifier.height(8.dp))
         
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            // YENİ: Kayan Pencere Toggle Butonu
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column {
                     Text("Oyun Modu (Kayan Pencere)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
@@ -295,6 +303,6 @@ fun SettingsScreen(activeTheme: String, onThemeChange: (String) -> Unit) {
             colors = ButtonDefaults.buttonColors(containerColor = Color.Gray),
             modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(16.dp)
-        ) { Text("Kayıtlı Grafik Geçmişini Sil") }
+        ) { Text("Kayıtlı Tüm Verileri (Raporlar dahil) Sil") }
     }
 }
