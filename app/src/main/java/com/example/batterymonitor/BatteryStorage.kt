@@ -12,13 +12,14 @@ object BatteryStorage {
     val batteryHealth = MutableStateFlow("Bilinmiyor")
     val batteryTemp = MutableStateFlow(0f)
     val batteryVoltage = MutableStateFlow(0f)
-    
-    // YENİ: Yüzde, Tahmin ve Alarmlar
     val batteryLevel = MutableStateFlow(0)
     val timeEstimation = MutableStateFlow("Hesaplanıyor...")
     
     val isTempAlarmEnabled = MutableStateFlow(false)
     val isFullAlarmEnabled = MutableStateFlow(false)
+    
+    // YENİ: Kayan Pencere Durumu
+    val isWidgetEnabled = MutableStateFlow(false)
 
     fun saveRecord(context: Context, currentMa: Float) {
         val timestamp = System.currentTimeMillis()
