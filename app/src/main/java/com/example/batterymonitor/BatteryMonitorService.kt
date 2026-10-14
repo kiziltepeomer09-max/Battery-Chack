@@ -44,7 +44,6 @@ class BatteryMonitorService : Service() {
     private var textWatt: TextView? = null
     private var textTemp: TextView? = null
 
-    // YENİ: Seans Takip Değişkenleri
     private var isCurrentlyCharging = false
     private var sessionStart = 0L
     private var sessionStartPct = 0
@@ -120,33 +119,30 @@ class BatteryMonitorService : Service() {
                 currentMilliAmps = abs(currentMilliAmps)
                 val currentWatt = (currentMilliAmps / 1000f) * voltF
 
-                // YENİ: Akıllı Şarj Seansı Mantığı
                 if (isCharging && !isCurrentlyCharging) {
-                    // Cihaz fişe takıldı!
                     isCurrentlyCharging = true
                     sessionStart = System.currentTimeMillis()
                     sessionStartPct = batteryPct
                     sessionMaxW = currentWatt
                     sessionMaxT = tempC
                 } else if (isCharging && isCurrentlyCharging) {
-                    // Cihaz şarj olmaya devam ediyor, rekorları güncelle
                     if (currentWatt > sessionMaxW) sessionMaxW = currentWatt
                     if (tempC > sessionMaxT) sessionMaxT = tempC
                 } else if (!isCharging && isCurrentlyCharging) {
-                    // Cihaz fişten çekildi! Raporu kaydet.
                     isCurrentlyCharging = false
                     val session = ChargeSession(sessionStart, System.currentTimeMillis(), sessionStartPct, batteryPct, sessionMaxW, sessionMaxT)
                     BatteryStorage.saveSession(applicationContext, session)
                 }
 
+                // DÜZELTME: Poco X7 Pro'nun gerçek 6000 mAh kapasitesine göre süre tahmini
                 if (currentMilliAmps > 100f) {
                     if (isCharging) {
-                        val missingMah = 5000f - (5000f * (batteryPct / 100f))
+                        val missingMah = 6000f - (6000f * (batteryPct / 100f))
                         val hours = missingMah / currentMilliAmps
                         val mins = (hours * 60).toInt()
                         BatteryStorage.timeEstimation.value = if (mins in 1..1440) "Doluma: ${mins / 60}s ${mins % 60}d" else "Hesaplanıyor..."
                     } else {
-                        val remainingMah = 5000f * (batteryPct / 100f)
+                        val remainingMah = 6000f * (batteryPct / 100f)
                         val hours = remainingMah / currentMilliAmps
                         val mins = (hours * 60).toInt()
                         BatteryStorage.timeEstimation.value = if (mins in 1..2880) "Bitmesine: ${mins / 60}s ${mins % 60}d" else "Hesaplanıyor..."
