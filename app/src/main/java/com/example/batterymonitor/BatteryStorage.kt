@@ -9,11 +9,16 @@ object BatteryStorage {
     
     val liveCurrentMa = MutableStateFlow(0f)
     val isServiceRunning = MutableStateFlow(false)
-    
-    // YENİ: Donanım ve Pil Bilgileri
     val batteryHealth = MutableStateFlow("Bilinmiyor")
     val batteryTemp = MutableStateFlow(0f)
     val batteryVoltage = MutableStateFlow(0f)
+    
+    // YENİ: Yüzde, Tahmin ve Alarmlar
+    val batteryLevel = MutableStateFlow(0)
+    val timeEstimation = MutableStateFlow("Hesaplanıyor...")
+    
+    val isTempAlarmEnabled = MutableStateFlow(false)
+    val isFullAlarmEnabled = MutableStateFlow(false)
 
     fun saveRecord(context: Context, currentMa: Float) {
         val timestamp = System.currentTimeMillis()
@@ -37,7 +42,7 @@ object BatteryStorage {
                 }
             }
         } catch (e: Exception) { e.printStackTrace() }
-        return list.takeLast(150) // Sadece son 150 okuma
+        return list.takeLast(150)
     }
 
     fun clearHistory(context: Context) {
